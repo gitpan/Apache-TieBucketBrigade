@@ -1,0 +1,34 @@
+Apache-TieBucketBrigade version 0.01
+====================================
+
+Apache::TieBucketBrigade ties an IO::Handle to an Apache 2 bucket brigade 
+in order to make building protocol handlers much simpler.
+
+The test suite sucks, but I'm releasing to code anyway.  Hopefully I'll figure
+out how to use Apache::Test to test protocol handlers soon.  For now you'll
+have to test manually with Apache::TestTieBucketBrigade (included).
+
+INSTALLATION
+
+  % perl Makefile.PL
+  % make
+  % make test
+  % make install
+
+DEPENDENCIES
+
+This module requires these other modules and libraries:
+
+IO::Stringy
+mod_perl 2
+Apache 2
+
+COPYRIGHT AND LICENCE
+
+Copyright (C) 2004 by Will Whittaker and Ken Simpson
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.8.2 or,
+at your option, any later version of Perl 5 you may have available.
+
+
