@@ -12,7 +12,7 @@ use APR::Util ();
 use Apache::Const -compile => qw(OK);
 use Apache::TieBucketBrigade;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 sub handler {
     my $c = shift;
@@ -41,10 +41,13 @@ with Apache::TieBucketBrigade.  This would be cooler if I actually new how
 to test mod_perl protocol handlers.  For now, put something like the following
 in httpd.conf
 
-Listen localhost:8013 
+Listen localhost:8013
+
 <VirtualHost localhost:8013>
+
       PerlModule                   Apache::TestTieBucketBrigade
       PerlProcessConnectionHandler Apache::TestTieBucketBrigade
+
 </VirtualHost>
 
 restart apache and hope for the best.  Telnet to locahost:8013 type some stuff

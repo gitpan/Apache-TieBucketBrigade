@@ -1,5 +1,8 @@
 Revision history for Perl extension Apache::TieBucketBrigade.
 
+0.02  Mon Feb 16 01:53:07 2004
+        - minor doc fixes
+
 0.01  Sun Feb  8 21:19:28 2004
 	- original version; created by h2xs 1.23 with options
 		-AX -b 5.6.1 -n Apache::TieBucketBrigade

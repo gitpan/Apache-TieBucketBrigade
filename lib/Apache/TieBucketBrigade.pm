@@ -15,7 +15,7 @@ use IO::WrapTie;
 
 our @ISA = qw(IO::WrapTie::Slave);
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 sub TIEHANDLE {
     my $invocant = shift;
@@ -191,7 +191,7 @@ brigade.
   use Apache::TieBucketBrigade;
   
   sub handler { 
-      my $FH = Apache::TieBucketBrigade->new_tie(\$c);
+      my $FH = Apache::TieBucketBrigade->new_tie($c);
       my @stuff = <$FH>;
       print $FH "stuff goes out too";
       $FH->print("it's and IO::Handle too!!!");
