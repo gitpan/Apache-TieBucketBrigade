@@ -3,6 +3,7 @@ Makefile.PL
 MANIFEST
 README
 lib/Apache/TieBucketBrigade.pm
-lib/Apache/TestTieBucketBrigade.pm
-t/blah.t
+t/TEST.PL
+t/conf/extra.conf.in
+t/response/Apache/TestTieBucketBrigade.pm
 META.yml                                 Module meta-data (added by MakeMaker)

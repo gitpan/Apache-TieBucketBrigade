@@ -1,6 +1,6 @@
 package Apache::TieBucketBrigade;
 
-use 5.006001;
+use 5.008001;
 
 use strict;
 use warnings;
@@ -11,11 +11,77 @@ use APR::Brigade ();
 use APR::Util ();
 use APR::Const -compile => qw(SUCCESS EOF);
 use Apache::Const -compile => qw(OK MODE_GETLINE);
+use APR::Const -compile => qw(NONBLOCK_READ POLLIN TIMEUP);
+use APR::Socket ();
 use IO::WrapTie;
+use Apache::Filter;
+use IO::File;
 
-our @ISA = qw(IO::WrapTie::Slave);
+use base qw(IO::WrapTie::Slave Class::Data::Inheritable);
+#our @ISA = qw
 
-our $VERSION = '0.03';
+our $VERSION = '0.05';
+
+__PACKAGE__->mk_classdata('handles');
+__PACKAGE__->{handles} = {};
+
+use ex::override
+    GLOBAL_select =>
+    sub {
+        if (@_ == 1) {
+            #ignore selecting filehandle
+            my $sh = shift;
+            unless (ref($sh)) {
+                my $caller = caller();
+                $sh = \*{$caller .'::'. $sh};
+            }
+            return CORE::select();
+        }
+        elsif (@_ == 4) {
+            my @bits = @_;
+            foreach my $fn (keys %{__PACKAGE__->{handles}} ) {
+                #check each phony fileno in our array to see if it matches
+                my $rin = vec($bits[0],$fn,1) if $bits[0];
+                my $win = vec($bits[1],$fn,1) if $bits[1];
+                my $ein = vec($bits[2],$fn,1) if $bits[2];
+                if ($rin or $win or $ein) {
+                    my $fh = __PACKAGE__->{handles}->{$fn}->{apache};
+                    my $conn = $fh->connection;
+                    my $pool = $conn->pool;
+                    my $sock = $conn->client_socket;
+
+                    my $timeout = $bits[3];
+                    $timeout = -1 unless defined $timeout;
+                    $timeout = $timeout * 1_000_000 if $timeout > 0;
+
+                    # XXX: APR::Socket->poll() really should return
+                    # the number of sockets successfully polled along with
+                    # the time left. We have to fake it here.
+                    my $rc = $sock->poll($pool, $timeout, APR::POLLIN);
+                    if($rc == APR::SUCCESS) {
+                        return wantarray ? (1, $bits[3]) : 1;
+                    }
+                    elsif($rc == APR::TIMEUP) {
+                        return wantarray ? (0, 0) : 0;
+                    }
+                    else {
+                        die "Failed to poll socket: " .
+                            APR::Error::strerror($rc);
+                    }
+                }
+            }
+
+            #if we haven't returned by now then it's just a normal
+            #select on some other fileno, use CORE::select
+            return
+                CORE::select($_[0],$_[1],$_[2],$_[3]);
+        }
+        else {
+            #some idiot doesn't know how to use select
+            die "WTF ?";
+        }
+};
+
 
 sub TIEHANDLE {
     my $invocant = shift;
@@ -40,6 +106,7 @@ sub PRINT {
         $bucket = APR::Bucket->new($line);
         $self->{bbout}->insert_tail($bucket);
     }
+
     my $bkt = APR::Bucket::flush_create($self->{connection}->bucket_alloc);
     $self->{bbout}->insert_tail($bkt);
     $self->{connection}->output_filters->pass_brigade($self->{bbout});
@@ -66,17 +133,16 @@ sub READLINE {
         my $rv = $self->{connection}->input_filters->get_brigade(
             $self->{bbin}, Apache::MODE_GETLINE);
         if ($rv != APR::SUCCESS && $rv != APR::EOF) {
-            my $error = APR::strerror($rv);
-            warn __PACKAGE__ . ": get_brigade: $error\n";
+            die "get_brigade: " . APR::strerror($rv);
             last;
         }
-        last if $self->{bbin}->empty;
-        while (!$self->{bbin}->empty) {
+        last if $self->{bbin}->is_empty;
+        while (!$self->{bbin}->is_empty) {
             my $bucket = $self->{bbin}->first;
             $bucket->remove;
             last if ($bucket->is_eos);
             my $data;
-            my $status = $bucket->read($data);
+            my $status = $bucket->read($data, APR::NONBLOCK_READ);
             $out .= $data;
             last unless $status == APR::SUCCESS;
             if (defined $data) {
@@ -86,9 +152,7 @@ sub READLINE {
         }
         last if $last;
     }
-    $self->{bbin}->destroy;
     return undef unless defined $out;
-    return undef if $out =~ /^[\r\n]+$/;
     return $out if $out =~ /[\r\n]+$/;
     return $out;
 }
@@ -102,7 +166,7 @@ sub GETC {
 }
 
 sub READ {
-#this buffers however man unused bytes are read from the bucket
+#this buffers however many unused bytes are read from the bucket
 #brigade into $self->{'_buffer'}.  Repeated calls should retreive anything
 #left in the buffer before more stuff is received
     my $self = shift;
@@ -115,16 +179,16 @@ sub READ {
             $self->{bbin}, Apache::MODE_GETLINE);
         if ($rv != APR::SUCCESS && $rv != APR::EOF) {
             my $error = APR::strerror($rv);
-            warn __PACKAGE__ . ": get_brigade: $error\n";
+            die "get_brigade: " . APR::strerror($rv);
             last;
         }
-        last if $self->{bbin}->empty;
-        while (!$self->{bbin}->empty) {
+        last if $self->{bbin}->is_empty;
+        while (!$self->{bbin}->is_empty) {
             my $bucket = $self->{bbin}->first;
             $bucket->remove;
             $last++ and last if ($bucket->is_eos);
             my $data;
-            my $status = $bucket->read($data);
+            my $status = $bucket->read($data, APR::NONBLOCK_READ);
             $out .= $data;
             $last++ and last unless $status == APR::SUCCESS;
             $last++ and last unless defined $data;
@@ -145,8 +209,12 @@ sub READ {
 }
 
 sub CLOSE {
+#close the socket and clean up the Sneaky globals
     my $self = shift;
-    $self->{socket}->close;
+    my $c = $self->{connection};
+    my $sock = $c->client_socket;
+    delete __PACKAGE__->{handles}->{$self->{fileno}};
+    return $sock->close;
 }
 
 sub OPEN {
@@ -154,35 +222,64 @@ sub OPEN {
 }
 
 sub FILENO {
-#pretends to be STDIN so that IO::Select will work
-    shift;
-    return 0;
+#gets a unique fileno from new_tmpfile but pretends that this is the fileno
+#for the apache brigade.  Stores the fake filehandle in a global so that it
+#won't go away until cleanup.
+#stores the real filehandle in the same global array so that we can look it up
+#by fileno later, and store the fileno in the object so we can look it up
+#there later for destruction of the global
+#this might cause all sorts of resource problems
+    my $self = shift;
+    return $self->{fileno} if defined $self->{fileno};
+    my $fh = IO::File->new_tmpfile;
+    my $fn = fileno($fh);
+
+    __PACKAGE__->{handles}->{$fn} = {fake => $fh,
+                                     apache => $self};
+
+    $self->{fileno} = $fn;
+    return fileno($fh);
+}
+
+sub connection {
+    my $self = shift;
+    return $self->{connection};
 }
 
 1;
 
 package IO::WrapTie::Master;
 #this is some sketchy shit
- 
+
 no warnings;
 
 *IO::WrapTie::Master::autoflush = sub {
     shift;
     return !$_[0];
 };
- 
+  
+# Check out the IO::Handle documentation for the blocking() method
+# to read how this function is supposed to work.
 *IO::WrapTie::Master::blocking = sub {
-#why of course I'm non blocking
-   shift;
-   return !$_[0];
+    my $h = shift;
+    my $new_blocking = shift;
+    my $c = $h->connection();
+    my $sock = $c->client_socket;
+
+    my $old_blocking = $sock->opt_get(APR::SO_NONBLOCK);
+    if(defined $new_blocking) {
+        $sock->opt_set(APR::SO_NONBLOCK, !$new_blocking);
+        return $old_blocking;
+    }
+    else {
+        return $old_blocking;
+    }
 };
- 
+
 use warnings;
 
 1;
 
-
-1;
 __END__
 
 =head1 NAME
@@ -210,14 +307,28 @@ brigade.
 This module has one usefull method "new_tie" which takes an Apache connection
 object and returns a tied IO::Handle object.  It should be used inside a 
 mod_perl protocol handler to make dealing with the bucket brigade bitz 
-easier.  For reasons of my own, FILENO will pretend to be STDIN so you may
-need to keep this in mind.  Also IO::Handle::autoflush and IO::Handle::blocking
-are essentially noops.
+easier.  FILENO will emulate a real fileno (using FILE::IO::new_tmpfile) and
+overrides CORE::select so that 4 arg select will work as expected 
+(APR::Socket->poll underneath).  IO::Handle::blocking will also work to set
+BLOCKING or NONBLOCKING, however autoflush is a noop.  New to this version,
+closing the filehandle will actually close the connection.  Note that several
+things here are a bit hackish, and there is the potential for resource problems
+since twice as many real file descriptors are used if FILENO is used then 
+would otherwise be if I didn't have to fake it.
+
+This module requires mod_perl 1.99_18 or greater (so that support for 
+APR::Socket->poll is included) otherwise it won't work.
 
 =head2 EXPORT
 
 None
 
+=head2 BUGS
+
+Many, I know for a fact everything other than readline, write, close, fileno
+and tiehandle doesn't work properly.  The above are probably buggy as hell.
+Also the test suite is just broken.  As soon as I fix it the above bugs should
+be resolved.
 
 =head1 SEE ALSO
 
@@ -236,6 +347,5 @@ Copyright (C) 2004 by Will Whittaker and Ken Simpson
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself, either Perl version 5.8.2 or,
 at your option, any later version of Perl 5 you may have available.
-
 
 =cut

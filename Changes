@@ -1,4 +1,6 @@
 Revision history for Perl extension Apache::TieBucketBrigade.
+0.05  Fri Sep 10 17:12:21 2004
+        - support for polling and select proxying
 
 0.03  Wed Feb 18 02:59:18 2004
         - changed autoflush and blocking implementation to not spit warnings

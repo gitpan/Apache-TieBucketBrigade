@@ -25,6 +25,8 @@ sub handler {
 1;
 __END__
 
+=pod
+
 =head1 NAME
 
 Apache::TestTieBucketBrigade - Tests Apache::TieBucketBrigade takes a bunch of
