@@ -15,7 +15,7 @@ use IO::WrapTie;
 
 our @ISA = qw(IO::WrapTie::Slave);
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 sub TIEHANDLE {
     my $invocant = shift;
@@ -162,17 +162,24 @@ sub FILENO {
 1;
 
 package IO::WrapTie::Master;
+#this is some sketchy shit
+ 
+no warnings;
 
-sub autoflush {
+*IO::WrapTie::Master::autoflush = sub {
     shift;
     return !$_[0];
-}
-
-sub blocking {
+};
+ 
+*IO::WrapTie::Master::blocking = sub {
 #why of course I'm non blocking
    shift;
    return !$_[0];
-}
+};
+ 
+use warnings;
+
+1;
 
 
 1;
